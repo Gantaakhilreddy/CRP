@@ -26,6 +26,7 @@ import com.college.booking.repository.EquipmentRepository;
 import com.college.booking.repository.ResourceRepository;
 import com.college.booking.repository.UserRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.DayOfWeek;
@@ -33,6 +34,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -50,6 +52,7 @@ public class BookingService {
     private final NotificationService notificationService;
     private final AuditService auditService;
     private final WaitlistService waitlistService;
+    private final OccupancyService occupancyService;
     private final DtoMapper mapper;
 
     public BookingService(BookingRepository bookingRepository,
@@ -63,6 +66,7 @@ public class BookingService {
                           NotificationService notificationService,
                           AuditService auditService,
                           WaitlistService waitlistService,
+                          OccupancyService occupancyService,
                           DtoMapper mapper) {
         this.bookingRepository = bookingRepository;
         this.bookingResourceRepository = bookingResourceRepository;
@@ -75,10 +79,11 @@ public class BookingService {
         this.notificationService = notificationService;
         this.auditService = auditService;
         this.waitlistService = waitlistService;
+        this.occupancyService = occupancyService;
         this.mapper = mapper;
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public BookingView create(User actor, CreateBookingRequest req) {
         if (req.resourceIds() == null || req.resourceIds().isEmpty()) {
             throw ApiException.badRequest("NO_RESOURCES", "Select at least one resource.");
@@ -92,19 +97,24 @@ public class BookingService {
                 first = created;
             }
         }
+        occupancyService.invalidateAfterCommit();
         return toView(first);
     }
 
     private Booking createSingle(User actor, CreateBookingRequest req, LocalDate date, Booking parent) {
+        User lockedUser = userRepository.lockById(actor.getId())
+                .orElseThrow(() -> ApiException.notFound("User not found."));
         List<Booking> doubles = bookingRepository.findUserDoubleBookings(
-                actor.getId(), date, req.startTime(), req.endTime(), AvailabilityService.ACTIVE);
+                lockedUser.getId(), date, req.startTime(), req.endTime(), AvailabilityService.ACTIVE);
         if (!doubles.isEmpty()) {
             throw ApiException.conflict("USER_DOUBLE_BOOKING",
                     "You already have a booking that overlaps " + date + " " + req.startTime() + "–" + req.endTime() + ".");
         }
 
+        List<Long> resourceIds = new ArrayList<>(req.resourceIds());
+        resourceIds.sort(Comparator.naturalOrder());
         List<Resource> locked = new ArrayList<>();
-        for (Long id : req.resourceIds()) {
+        for (Long id : resourceIds) {
             Resource resource = resourceRepository.lockById(id)
                     .orElseThrow(() -> ApiException.notFound("Resource " + id + " does not exist."));
             String reason = availabilityService.unavailableReason(resource, date, req.startTime(), req.endTime());
@@ -115,8 +125,10 @@ public class BookingService {
         }
 
         if (req.equipment() != null) {
-            for (var eq : req.equipment()) {
-                Equipment item = equipmentRepository.findById(eq.equipmentId())
+            List<com.college.booking.dto.BookingDtos.EquipmentQty> equipment = new ArrayList<>(req.equipment());
+            equipment.sort(Comparator.comparing(com.college.booking.dto.BookingDtos.EquipmentQty::equipmentId));
+            for (var eq : equipment) {
+                Equipment item = equipmentRepository.lockById(eq.equipmentId())
                         .orElseThrow(() -> ApiException.notFound("Equipment not found."));
                 int qty = eq.quantity() == null ? 1 : eq.quantity();
                 if (item.getAvailable() < qty) {
@@ -127,7 +139,7 @@ public class BookingService {
         }
 
         Booking booking = new Booking();
-        booking.setUser(actor);
+        booking.setUser(lockedUser);
         booking.setTitle(req.title() == null || req.title().isBlank()
                 ? locked.get(0).getName() + " booking" : req.title());
         booking.setPurpose(req.purpose());
@@ -141,8 +153,8 @@ public class BookingService {
         booking.setParentBooking(parent);
         booking.setBookingKind(req.bookingKind() == null ? "RESOURCE" : req.bookingKind());
         booking.setCheckInToken(UUID.randomUUID().toString());
-        booking.setStatus(initialStatus(actor.getRole()));
-        bookingRepository.save(booking);
+        booking.setStatus(initialStatus(lockedUser.getRole()));
+        bookingRepository.saveAndFlush(booking);
 
         for (Resource resource : locked) {
             BookingResource br = new BookingResource();
@@ -150,11 +162,28 @@ public class BookingService {
             br.setResource(resource);
             bookingResourceRepository.save(br);
         }
+        bookingResourceRepository.flush();
+
+        for (Resource resource : locked) {
+            List<Booking> conflicts = bookingRepository.findConflicts(
+                    resource.getId(), date, req.startTime(), req.endTime(), AvailabilityService.ACTIVE);
+            boolean collision = conflicts.stream().anyMatch(c -> !c.getId().equals(booking.getId()));
+            if (collision) {
+                throw ApiException.conflict("BOOKING_CONFLICT",
+                        resource.getName() + " was booked by someone else at the same moment.");
+            }
+        }
 
         if (req.equipment() != null) {
-            for (var eq : req.equipment()) {
-                Equipment item = equipmentRepository.findById(eq.equipmentId()).orElseThrow();
+            List<com.college.booking.dto.BookingDtos.EquipmentQty> equipment = new ArrayList<>(req.equipment());
+            equipment.sort(Comparator.comparing(com.college.booking.dto.BookingDtos.EquipmentQty::equipmentId));
+            for (var eq : equipment) {
+                Equipment item = equipmentRepository.lockById(eq.equipmentId()).orElseThrow();
                 int qty = eq.quantity() == null ? 1 : eq.quantity();
+                if (item.getAvailable() < qty) {
+                    throw ApiException.conflict("EQUIPMENT_UNAVAILABLE",
+                            item.getName() + " does not have " + qty + " units available.");
+                }
                 item.setAvailable(item.getAvailable() - qty);
                 BookingEquipment be = new BookingEquipment();
                 be.setBooking(booking);
@@ -164,9 +193,9 @@ public class BookingService {
             }
         }
 
-        createApprovals(booking, actor);
-        notifyOnCreate(booking, actor, locked);
-        auditService.record(actor, "CREATE_BOOKING", "Booking", booking.getId(),
+        createApprovals(booking, lockedUser);
+        notifyOnCreate(booking, lockedUser, locked);
+        auditService.record(lockedUser, "CREATE_BOOKING", "Booking", booking.getId(),
                 booking.getTitle() + " on " + date);
         return booking;
     }
@@ -246,6 +275,7 @@ public class BookingService {
                     "/bookings/" + booking.getId());
         }
         bookingRepository.save(booking);
+        occupancyService.invalidateAfterCommit();
         auditService.record(actor, "APPROVE_BOOKING", "Booking", booking.getId(), actor.getRole().name());
         return toView(booking);
     }
@@ -268,6 +298,7 @@ public class BookingService {
         notificationService.notify(booking.getUser(), NotificationType.BOOKING_REJECTED, "Booking rejected",
                 booking.getTitle() + " was rejected. " + booking.getRejectionReason(),
                 "/bookings/" + booking.getId());
+        occupancyService.invalidateAfterCommit();
         auditService.record(actor, "REJECT_BOOKING", "Booking", booking.getId(), booking.getRejectionReason());
         return toView(booking);
     }
@@ -287,6 +318,7 @@ public class BookingService {
         notificationService.notify(booking.getUser(), NotificationType.BOOKING_CANCELLED, "Booking cancelled",
                 booking.getTitle() + " was cancelled.", "/bookings/" + booking.getId());
         waitlistService.notifyNext(booking);
+        occupancyService.invalidateAfterCommit();
         auditService.record(actor, "CANCEL_BOOKING", "Booking", booking.getId(), null);
         return toView(booking);
     }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import client from '../api/client'
+import client, { asItems } from '../api/client'
 import { errorMessage } from '../utils/status'
 
 export default function Events() {
@@ -11,7 +11,7 @@ export default function Events() {
   })
   useEffect(() => {
     client.get('/events').then((r) => setEvents(r.data))
-    client.get('/resources', { params: { typeCode: 'SEMINAR_HALL' } }).then((r) => setResources(r.data))
+    client.get('/resources', { params: { typeCode: 'SEMINAR_HALL', size: 100 } }).then((r) => setResources(asItems(r.data)))
   }, [])
   const submit = async (e) => {
     e.preventDefault()

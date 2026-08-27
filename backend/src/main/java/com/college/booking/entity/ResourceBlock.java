@@ -3,6 +3,7 @@ package com.college.booking.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -17,7 +18,10 @@ import java.time.LocalTime;
 @Setter
 @NoArgsConstructor
 @Entity
-@Table(name = "resource_blocks")
+@Table(name = "resource_blocks", indexes = {
+        @Index(name = "idx_block_resource", columnList = "resource_id"),
+        @Index(name = "idx_block_dates", columnList = "start_date,end_date")
+})
 public class ResourceBlock extends BaseEntity {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)

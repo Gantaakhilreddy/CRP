@@ -24,7 +24,8 @@ import java.time.LocalTime;
 @Entity
 @Table(name = "waitlist", indexes = {
         @Index(name = "idx_waitlist_resource", columnList = "resource_id"),
-        @Index(name = "idx_waitlist_status", columnList = "status")
+        @Index(name = "idx_waitlist_status", columnList = "status"),
+        @Index(name = "idx_waitlist_slot", columnList = "resource_id,booking_date,start_time,end_time,status")
 })
 public class Waitlist extends BaseEntity {
 

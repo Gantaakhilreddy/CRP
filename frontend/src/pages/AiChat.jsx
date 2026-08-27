@@ -44,7 +44,7 @@ export default function AiChat() {
   return (
     <div className="grid gap-6 lg:grid-cols-[1.1fr_.9fr]">
       <div>
-        <PageHeader kicker="Assistant" title="Ask the campus" subtitle="Answers are grounded in MySQL. Groq only writes the sentence — it cannot invent rooms." />
+        <PageHeader kicker="Assistant" title="Ask the campus" subtitle="Answers are grounded in MySQL. Groq only writes the sentence — it cannot invent rooms." actions={<Link to="/ai-booking" className="btn-primary">Natural-language booking</Link>} />
         <div className="mb-3 flex flex-wrap gap-2">
           {sparks.map((s) => (
             <button key={s} onClick={() => send(s)} className="rounded-full border px-3 py-1 text-xs hover:bg-white dark:border-white/10">{s}</button>

@@ -20,7 +20,40 @@ public interface ResourceRepository extends JpaRepository<Resource, Long>, JpaSp
 
     Optional<Resource> findByCode(String code);
 
+    Optional<Resource> findByCodeIgnoreCase(String code);
+
+    Optional<Resource> findByNameIgnoreCase(String name);
+
+    List<Resource> findByEnabledTrueAndNameContainingIgnoreCase(String name);
+
     Optional<Resource> findByQrToken(String qrToken);
+
+    @Query("""
+            SELECT DISTINCT r FROM Resource r
+            JOIN FETCH r.resourceType
+            JOIN FETCH r.floor
+            JOIN FETCH r.building
+            WHERE r.enabled = true
+            """)
+    List<Resource> findAllEnabledDetailed();
+
+    @Query("""
+            SELECT DISTINCT r FROM Resource r
+            JOIN FETCH r.resourceType
+            JOIN FETCH r.floor
+            JOIN FETCH r.building
+            WHERE r.building.id = :buildingId AND r.enabled = true
+            """)
+    List<Resource> findEnabledDetailedByBuildingId(@Param("buildingId") Long buildingId);
+
+    @Query("""
+            SELECT DISTINCT r FROM Resource r
+            JOIN FETCH r.resourceType
+            JOIN FETCH r.floor
+            JOIN FETCH r.building
+            WHERE r.floor.id = :floorId AND r.enabled = true
+            """)
+    List<Resource> findEnabledDetailedByFloorId(@Param("floorId") Long floorId);
 
     long countByBuildingIdAndEnabledTrue(Long buildingId);
 
@@ -44,7 +77,10 @@ public interface ResourceRepository extends JpaRepository<Resource, Long>, JpaSp
     Optional<Resource> findDetailedById(@Param("id") Long id);
 
     @Query("""
-            SELECT r FROM Resource r
+            SELECT DISTINCT r FROM Resource r
+            JOIN FETCH r.resourceType
+            JOIN FETCH r.floor
+            JOIN FETCH r.building
             WHERE r.enabled = true
               AND (:buildingId IS NULL OR r.building.id = :buildingId)
               AND (:floorId IS NULL OR r.floor.id = :floorId)
@@ -66,4 +102,30 @@ public interface ResourceRepository extends JpaRepository<Resource, Long>, JpaSp
             @Param("department") String department,
             @Param("minCapacity") Integer minCapacity
     );
+
+    @Query("""
+            SELECT DISTINCT r FROM Resource r
+            JOIN FETCH r.resourceType
+            JOIN FETCH r.floor
+            JOIN FETCH r.building
+            WHERE (:buildingId IS NULL OR r.building.id = :buildingId)
+              AND (:floorId IS NULL OR r.floor.id = :floorId)
+              AND (:typeCode IS NULL OR r.resourceType.code = :typeCode)
+              AND (:enabled IS NULL OR r.enabled = :enabled)
+              AND (
+                    :q IS NULL OR :q = '' OR
+                    LOWER(r.name) LIKE LOWER(CONCAT('%', :q, '%')) OR
+                    LOWER(r.code) LIKE LOWER(CONCAT('%', :q, '%')) OR
+                    LOWER(r.department) LIKE LOWER(CONCAT('%', :q, '%'))
+                  )
+            """)
+    List<Resource> adminSearch(
+            @Param("q") String q,
+            @Param("buildingId") Long buildingId,
+            @Param("floorId") Long floorId,
+            @Param("typeCode") String typeCode,
+            @Param("enabled") Boolean enabled
+    );
+
+    boolean existsByCodeIgnoreCaseAndIdNot(String code, Long id);
 }

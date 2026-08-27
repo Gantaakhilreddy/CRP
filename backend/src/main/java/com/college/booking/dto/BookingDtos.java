@@ -8,6 +8,7 @@ import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -22,8 +23,8 @@ public class BookingDtos {
             @NotNull LocalDate date,
             @NotNull LocalTime startTime,
             @NotNull LocalTime endTime,
-            String title,
-            String purpose,
+            @Size(max = 160) String title,
+            @Size(max = 2000) String purpose,
             Integer attendees,
             String requirements,
             RecurrenceType recurrenceType,

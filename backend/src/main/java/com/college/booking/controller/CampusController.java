@@ -2,8 +2,11 @@ package com.college.booking.controller;
 
 import com.college.booking.dto.CampusDtos.BuildingDetail;
 import com.college.booking.dto.CampusDtos.BuildingSummary;
+import com.college.booking.dto.CampusDtos.CampusOverview;
 import com.college.booking.dto.CampusDtos.FloorMapDto;
+import com.college.booking.dto.CampusDtos.FloorSummary;
 import com.college.booking.dto.CampusDtos.LayoutUpdate;
+import com.college.booking.dto.CampusDtos.PageResponse;
 import com.college.booking.dto.CampusDtos.ResourceCard;
 import com.college.booking.entity.ResourceType;
 import com.college.booking.security.SecurityUtils;
@@ -33,6 +36,17 @@ public class CampusController {
     @GetMapping("/campus")
     public List<BuildingSummary> campus() {
         return campusService.campus(SecurityUtils.currentUser());
+    }
+
+    @GetMapping("/campus/overview")
+    public CampusOverview campusOverview() {
+        return campusService.overview(SecurityUtils.currentUser());
+    }
+
+    @GetMapping("/floors")
+    @PreAuthorize("hasRole('ADMIN')")
+    public List<FloorSummary> allFloors() {
+        return campusService.allFloors();
     }
 
     @GetMapping("/buildings")
@@ -73,11 +87,14 @@ public class CampusController {
     }
 
     @GetMapping("/available-now")
-    public List<ResourceCard> availableNow(
+    public PageResponse<ResourceCard> availableNow(
             @RequestParam(required = false) Long buildingId,
             @RequestParam(required = false) Long floorId,
-            @RequestParam(required = false) String typeCode
+            @RequestParam(required = false) String typeCode,
+            @RequestParam(required = false) String q,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "24") int size
     ) {
-        return campusService.availableNow(buildingId, floorId, typeCode, SecurityUtils.currentUser());
+        return campusService.availableNow(buildingId, floorId, typeCode, q, SecurityUtils.currentUser(), page, size);
     }
 }

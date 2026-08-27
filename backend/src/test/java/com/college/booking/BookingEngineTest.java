@@ -39,6 +39,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.college.booking.dto.ResourceAdminDtos.ResourceUpsertRequest;
+
 @SpringBootTest
 @AutoConfigureMockMvc
 @Transactional
@@ -48,6 +50,12 @@ class BookingEngineTest {
     @Autowired ObjectMapper objectMapper;
     @Autowired BookingService bookingService;
     @Autowired AvailabilityService availabilityService;
+    @Autowired com.college.booking.service.AiService aiService;
+    @Autowired com.college.booking.service.AnalyticsService analyticsService;
+    @Autowired com.college.booking.service.ReportService reportService;
+    @Autowired com.college.booking.service.DashboardService dashboardService;
+    @Autowired com.college.booking.service.OccupancyService occupancyService;
+    @Autowired com.college.booking.service.ResourceAdminService resourceAdminService;
     @Autowired UserRepository userRepository;
     @Autowired ResourceRepository resourceRepository;
     @Autowired ResourceTypeRepository resourceTypeRepository;
@@ -59,6 +67,8 @@ class BookingEngineTest {
     private User professor;
     private User admin;
     private Resource room;
+    private Resource classroomOne;
+    private Resource conferenceRoom;
 
     @BeforeEach
     void setup() {
@@ -94,6 +104,9 @@ class BookingEngineTest {
         room.setWorkingHoursEnd(LocalTime.of(18, 0));
         room.setQrToken(UUID.randomUUID().toString());
         room = resourceRepository.save(room);
+
+        classroomOne = copyRoom("Classroom 1", "C1-001");
+        conferenceRoom = copyRoom("Conference Room", "CONF-001");
 
         professor = saveUser("Dr Test", "professor@test.com", Role.PROFESSOR);
         admin = saveUser("Admin Test", "admin@test.com", Role.ADMIN);
@@ -171,6 +184,158 @@ class BookingEngineTest {
         bookingService.cancel(created.id(), admin);
         assertThat(availabilityService.check(room.getId(), LocalDate.now().plusDays(5),
                 LocalTime.of(11, 0), LocalTime.of(13, 0)).available()).isTrue();
+    }
+
+    @Test
+    void naturalLanguageBooksUnambiguousRequest() {
+        var result = aiService.bookFromLanguage(
+                "Book Classroom 1 tomorrow from 10 AM to 12 PM.", student, true);
+        assertThat(result.action()).isEqualTo("BOOKED");
+        assertThat(result.booking()).isNotNull();
+        assertThat(result.booking().resources().get(0).name()).isEqualTo("Classroom 1");
+        assertThat(availabilityService.check(classroomOne.getId(), LocalDate.now().plusDays(1),
+                LocalTime.of(10, 0), LocalTime.of(12, 0)).available()).isFalse();
+    }
+
+    @Test
+    void naturalLanguageClarifiesMissingTime() {
+        var result = aiService.bookFromLanguage("Book Classroom 1 tomorrow", student, true);
+        assertThat(result.action()).isEqualTo("CLARIFY");
+        assertThat(result.booking()).isNull();
+    }
+
+    @Test
+    void naturalLanguageUsesSameConflictRules() {
+        aiService.bookFromLanguage("Book Classroom 1 tomorrow from 10 AM to 12 PM.", student, true);
+        var second = aiService.bookFromLanguage("Book Classroom 1 tomorrow from 10 AM to 12 PM.", professor, true);
+        assertThat(second.action()).isEqualTo("UNAVAILABLE");
+        assertThat(second.message()).containsIgnoringCase("booked");
+    }
+
+    @Test
+    void naturalLanguageBooksConferencePhrase() {
+        var result = aiService.bookFromLanguage(
+                "Reserve the conference room today from 2 to 4.", admin, true);
+        assertThat(result.action()).isEqualTo("BOOKED");
+        assertThat(result.booking().startTime().getHour()).isEqualTo(14);
+        assertThat(result.booking().endTime().getHour()).isEqualTo(16);
+    }
+
+    @Test
+    void analyticsAreDatabaseDrivenAndLabelForecasts() {
+        bookingService.create(admin, request(room.getId(), LocalDate.now(),
+                LocalTime.of(10, 0), LocalTime.of(11, 0)));
+        occupancyService.invalidate();
+        var overview = analyticsService.overview(LocalDate.now().minusDays(1), LocalDate.now().plusDays(1));
+        assertThat((Long) overview.kpis().get("totalBookings")).isGreaterThanOrEqualTo(1L);
+        assertThat(overview.predictions().kind()).isEqualTo("FORECAST");
+        assertThat(overview.predictions().disclaimer()).contains("not live occupancy");
+        assertThat(overview.live().get("available")).isNotNull();
+        assertThat(overview.bookingTrends()).isNotEmpty();
+        assertThat(overview.peakHours()).hasSize(10);
+    }
+
+    @Test
+    void pdfExportContainsAnalyticsAndIsPdf() {
+        bookingService.create(admin, request(room.getId(), LocalDate.now(),
+                LocalTime.of(9, 0), LocalTime.of(10, 0)));
+        byte[] pdf = reportService.pdf(LocalDate.now().minusDays(1), LocalDate.now().plusDays(1));
+        assertThat(pdf.length).isGreaterThan(200);
+        assertThat(new String(pdf, 0, 4)).isEqualTo("%PDF");
+    }
+
+    @Test
+    void dashboardUsesLiveSnapshot() {
+        occupancyService.invalidate();
+        var dash = dashboardService.forUser(student);
+        assertThat(dash.get("live")).isInstanceOf(java.util.Map.class);
+        assertThat(dash.get("heatmap")).isInstanceOf(java.util.List.class);
+        assertThat(dash.get("buildings")).isInstanceOf(java.util.List.class);
+        assertThat(dash.get("availableNow")).isInstanceOf(java.util.List.class);
+        assertThat(dash.get("pending")).isInstanceOf(Number.class);
+    }
+
+    @Test
+    void adminCanCreateAndListResource() {
+        var created = resourceAdminService.create(admin, upsert("New Seminar", "NEW-SEM", "AVAILABLE", 80));
+        assertThat(created.name()).isEqualTo("New Seminar");
+        assertThat(created.managementStatus()).isEqualTo("AVAILABLE");
+        var page = resourceAdminService.list("New Seminar", null, null, null, null, 0, 20);
+        assertThat(page.items().stream().anyMatch(r -> r.code().equals("NEW-SEM"))).isTrue();
+    }
+
+    @Test
+    void cannotDeleteResourceWithBookingHistory() {
+        bookingService.create(admin, request(conferenceRoom.getId(), LocalDate.now().plusDays(1),
+                LocalTime.of(10, 0), LocalTime.of(11, 0)));
+        assertThatThrownBy(() -> resourceAdminService.delete(admin, conferenceRoom.getId()))
+                .hasMessageContaining("booking");
+    }
+
+    @Test
+    void cannotDeactivateResourceWithUpcomingBooking() {
+        bookingService.create(admin, request(classroomOne.getId(), LocalDate.now().plusDays(2),
+                LocalTime.of(10, 0), LocalTime.of(11, 0)));
+        assertThatThrownBy(() -> resourceAdminService.setStatus(admin, classroomOne.getId(), "INACTIVE"))
+                .hasMessageContaining("upcoming");
+    }
+
+    @Test
+    void deactivateAfterCancelThenDeleteUnused() {
+        var created = bookingService.create(admin, request(classroomOne.getId(), LocalDate.now().plusDays(3),
+                LocalTime.of(13, 0), LocalTime.of(14, 0)));
+        bookingService.cancel(created.id(), admin);
+        var inactive = resourceAdminService.setStatus(admin, classroomOne.getId(), "INACTIVE");
+        assertThat(inactive.enabled()).isFalse();
+        assertThat(inactive.managementStatus()).isEqualTo("INACTIVE");
+
+        Resource unused = copyRoom("Disposable Hall", "DISP-1");
+        resourceAdminService.delete(admin, unused.getId());
+        assertThat(resourceRepository.findById(unused.getId())).isEmpty();
+    }
+
+    @Test
+    void studentCannotCallAdminResourceApi() throws Exception {
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new LoginRequest("student@test.com", "Password@123"))))
+                .andExpect(status().isOk());
+        String token = objectMapper.readTree(
+                mockMvc.perform(post("/api/auth/login")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(objectMapper.writeValueAsString(new LoginRequest("student@test.com", "Password@123"))))
+                        .andReturn().getResponse().getContentAsString()
+        ).get("accessToken").asText();
+        mockMvc.perform(post("/api/admin/resources")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+    }
+
+    private ResourceUpsertRequest upsert(String name, String code, String status, int capacity) {
+        return new ResourceUpsertRequest(
+                name, code, "CLASSROOM", room.getBuilding().getId(), room.getFloor().getId(),
+                capacity, "CSE", "Admin created", null, status,
+                LocalTime.of(8, 0), LocalTime.of(18, 0), List.of(),
+                true, false, true, true, false, false, false, null, null, false, null, null, null
+        );
+    }
+
+    private Resource copyRoom(String name, String code) {
+        Resource extra = new Resource();
+        extra.setName(name);
+        extra.setCode(code);
+        extra.setResourceType(room.getResourceType());
+        extra.setFloor(room.getFloor());
+        extra.setBuilding(room.getBuilding());
+        extra.setCapacity(40);
+        extra.setOperationalStatus(ResourceStatus.AVAILABLE);
+        extra.setEnabled(true);
+        extra.setWorkingHoursStart(LocalTime.of(8, 0));
+        extra.setWorkingHoursEnd(LocalTime.of(18, 0));
+        extra.setQrToken(UUID.randomUUID().toString());
+        return resourceRepository.save(extra);
     }
 
     private CreateBookingRequest request(Long resourceId, LocalDate date, LocalTime start, LocalTime end) {

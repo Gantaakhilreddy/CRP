@@ -15,6 +15,7 @@ import com.college.booking.repository.ResourceRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.ArrayList;
@@ -36,6 +37,7 @@ public class AvailabilityService {
     private final BookingRepository bookingRepository;
     private final MaintenanceRepository maintenanceRepository;
     private final ResourceBlockRepository blockRepository;
+    private final Clock clock;
     private final LocalTime campusOpen;
     private final LocalTime campusClose;
 
@@ -44,6 +46,7 @@ public class AvailabilityService {
             BookingRepository bookingRepository,
             MaintenanceRepository maintenanceRepository,
             ResourceBlockRepository blockRepository,
+            Clock clock,
             @Value("${app.working-hours-start}") String open,
             @Value("${app.working-hours-end}") String close
     ) {
@@ -51,6 +54,7 @@ public class AvailabilityService {
         this.bookingRepository = bookingRepository;
         this.maintenanceRepository = maintenanceRepository;
         this.blockRepository = blockRepository;
+        this.clock = clock;
         this.campusOpen = LocalTime.parse(open);
         this.campusClose = LocalTime.parse(close);
     }
@@ -107,7 +111,7 @@ public class AvailabilityService {
         if (!resource.isEnabled() || resource.getOperationalStatus() == ResourceStatus.OUT_OF_SERVICE) {
             return ResourceStatus.OUT_OF_SERVICE;
         }
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(clock);
         if (!maintenanceRepository.findActiveOnDate(resource.getId(), today).isEmpty()
                 || resource.getOperationalStatus() == ResourceStatus.MAINTENANCE) {
             return ResourceStatus.MAINTENANCE;
@@ -116,7 +120,7 @@ public class AvailabilityService {
                 || !blockRepository.findActiveOnDate(resource.getId(), today).isEmpty()) {
             return ResourceStatus.BLOCKED;
         }
-        LocalTime now = LocalTime.now();
+        LocalTime now = LocalTime.now(clock);
         List<Booking> current = bookingRepository.findConflicts(resource.getId(), today, now, now.plusMinutes(1), ACTIVE);
         if (!current.isEmpty()) {
             boolean pending = current.stream().anyMatch(b ->

@@ -26,6 +26,8 @@ import Exams from './pages/Exams'
 import Issues from './pages/Issues'
 import AdminHome from './pages/admin/AdminHome'
 import FloorEditorPage from './pages/admin/FloorEditorPage'
+import AnalyticsDashboard from './pages/admin/AnalyticsDashboard'
+import ResourceManager from './pages/admin/ResourceManager'
 
 function Guard({ children, roles }) {
   const { isAuthenticated, role } = useAuth()
@@ -68,6 +70,8 @@ export default function App() {
         <Route path="/exams" element={<Exams />} />
         <Route path="/issues" element={<Issues />} />
         <Route path="/admin" element={<Guard roles={['ADMIN']}><AdminHome /></Guard>} />
+        <Route path="/admin/analytics" element={<Guard roles={['ADMIN']}><AnalyticsDashboard /></Guard>} />
+        <Route path="/admin/resources" element={<Guard roles={['ADMIN']}><ResourceManager /></Guard>} />
         <Route path="/admin/floors/:id/editor" element={<Guard roles={['ADMIN']}><FloorEditorPage /></Guard>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

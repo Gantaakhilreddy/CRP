@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
-import client from '../api/client'
+import client, { asItems } from '../api/client'
 import { errorMessage } from '../utils/status'
 import StatusBadge from '../components/StatusBadge'
 import { PageHeader } from '../components/ui'
@@ -34,7 +34,7 @@ export default function Book() {
         buildingId: filters.buildingId || undefined,
         minCapacity: filters.minCapacity || undefined,
       },
-    }).then((r) => setRooms(r.data))
+    }).then((r) => setRooms(asItems(r.data)))
   }
 
   useEffect(() => {

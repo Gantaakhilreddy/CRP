@@ -24,6 +24,33 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
 
     long countByStatus(BookingStatus status);
 
+    long countByUserIdAndStatusIn(Long userId, Collection<BookingStatus> statuses);
+
+    long countByBookingDateBetween(LocalDate from, LocalDate to);
+
+    @Query("""
+            SELECT b FROM Booking b
+            JOIN FETCH b.user
+            WHERE b.user.id = :userId
+              AND b.status IN :statuses
+              AND (b.bookingDate > :today OR (b.bookingDate = :today AND b.endTime >= :now))
+            ORDER BY b.bookingDate ASC, b.startTime ASC
+            """)
+    List<Booking> findUpcoming(
+            @Param("userId") Long userId,
+            @Param("statuses") Collection<BookingStatus> statuses,
+            @Param("today") LocalDate today,
+            @Param("now") LocalTime now
+    );
+
+    @Query("""
+            SELECT b FROM Booking b
+            JOIN FETCH b.user
+            WHERE b.user.id = :userId
+            ORDER BY b.bookingDate DESC, b.startTime DESC
+            """)
+    List<Booking> findRecentByUser(@Param("userId") Long userId);
+
     Optional<Booking> findByCheckInToken(String token);
 
     @Query("""
@@ -103,4 +130,73 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
             WHERE b.bookingDate BETWEEN :from AND :to
             """)
     List<Booking> findBetween(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    @Query("""
+            SELECT br.resource.id, b.status FROM BookingResource br
+            JOIN br.booking b
+            WHERE b.bookingDate = :date
+              AND b.status IN :statuses
+              AND b.startTime <= :now
+              AND b.endTime > :now
+            """)
+    List<Object[]> findOccupiedNow(
+            @Param("date") LocalDate date,
+            @Param("now") LocalTime now,
+            @Param("statuses") Collection<BookingStatus> statuses
+    );
+
+    @Query("""
+            SELECT DISTINCT br.resource.id FROM BookingResource br
+            JOIN br.booking b
+            WHERE br.resource.id IN :resourceIds
+              AND b.bookingDate = :date
+              AND b.status IN :statuses
+              AND b.startTime < :endTime
+              AND b.endTime > :startTime
+            """)
+    List<Long> findBusyResourceIds(
+            @Param("resourceIds") Collection<Long> resourceIds,
+            @Param("date") LocalDate date,
+            @Param("startTime") LocalTime startTime,
+            @Param("endTime") LocalTime endTime,
+            @Param("statuses") Collection<BookingStatus> statuses
+    );
+
+    @Query("""
+            SELECT b.status, COUNT(b) FROM Booking b
+            WHERE b.bookingDate BETWEEN :from AND :to
+            GROUP BY b.status
+            """)
+    List<Object[]> countStatusBetween(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    @Query("""
+            SELECT b.bookingDate, COUNT(b) FROM Booking b
+            WHERE b.bookingDate BETWEEN :from AND :to
+            GROUP BY b.bookingDate
+            ORDER BY b.bookingDate
+            """)
+    List<Object[]> countByDateBetween(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    @Query("""
+            SELECT COUNT(DISTINCT b.user.id) FROM Booking b
+            WHERE b.bookingDate BETWEEN :from AND :to
+              AND b.status NOT IN :excluded
+            """)
+    long countActiveUsersBetween(
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("excluded") Collection<BookingStatus> excluded
+    );
+
+    @Query("""
+            SELECT b.user.role, COUNT(DISTINCT b.user.id) FROM Booking b
+            WHERE b.bookingDate BETWEEN :from AND :to
+              AND b.status NOT IN :excluded
+            GROUP BY b.user.role
+            """)
+    List<Object[]> countActiveUsersByRole(
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("excluded") Collection<BookingStatus> excluded
+    );
 }

@@ -20,4 +20,6 @@ public interface WaitlistRepository extends JpaRepository<Waitlist, Long> {
 
     boolean existsByResourceIdAndUserIdAndBookingDateAndStartTimeAndEndTimeAndStatus(
             Long resourceId, Long userId, LocalDate date, LocalTime start, LocalTime end, WaitlistStatus status);
+
+    void deleteByResourceId(Long resourceId);
 }

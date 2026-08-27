@@ -16,6 +16,7 @@ const links = [
   { to: '/bookings', label: 'My bookings', icon: ClipboardCheck },
   { to: '/calendar', label: 'Calendar', icon: CalendarDays },
   { to: '/ai-chat', label: 'AI assistant', icon: Sparkles },
+  { to: '/ai-booking', label: 'AI booking', icon: Sparkles },
   { to: '/available-now', label: 'Available now', icon: Building2 },
 ]
 
@@ -33,7 +34,11 @@ export default function AppShell() {
 
   const extra = []
   if (role === 'PROFESSOR' || role === 'ADMIN') extra.push({ to: '/approvals', label: 'Approvals', icon: ClipboardCheck })
-  if (role === 'ADMIN') extra.push({ to: '/admin', label: 'Admin', icon: Building2 })
+  if (role === 'ADMIN') {
+    extra.push({ to: '/admin/analytics', label: 'Analytics', icon: LayoutDashboard })
+    extra.push({ to: '/admin/resources', label: 'Resources', icon: Building2 })
+    extra.push({ to: '/admin', label: 'Admin', icon: Building2 })
+  }
 
   const onSearch = (e) => {
     e.preventDefault()

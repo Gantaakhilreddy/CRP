@@ -1,6 +1,7 @@
 package com.college.booking.controller;
 
 import com.college.booking.dto.CampusDtos.AvailabilityResponse;
+import com.college.booking.dto.CampusDtos.PageResponse;
 import com.college.booking.dto.CampusDtos.ResourceCard;
 import com.college.booking.dto.CampusDtos.ResourceDetail;
 import com.college.booking.security.SecurityUtils;
@@ -33,7 +34,7 @@ public class ResourceController {
     }
 
     @GetMapping
-    public List<ResourceCard> search(
+    public PageResponse<ResourceCard> search(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) Long buildingId,
             @RequestParam(required = false) Long floorId,
@@ -43,10 +44,11 @@ public class ResourceController {
             @RequestParam(required = false) LocalDate date,
             @RequestParam(required = false) LocalTime startTime,
             @RequestParam(required = false) LocalTime endTime,
-            @RequestParam(required = false) List<String> facilities
-    ) {
+            @RequestParam(required = false) List<String> facilities,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "24") int size) {
         return campusService.search(q, buildingId, floorId, typeCode, department, minCapacity,
-                date, startTime, endTime, facilities, SecurityUtils.currentUser());
+                date, startTime, endTime, facilities, SecurityUtils.currentUser(), page, size);
     }
 
     @GetMapping("/{id}")
@@ -59,8 +61,7 @@ public class ResourceController {
             @PathVariable Long id,
             @RequestParam LocalDate date,
             @RequestParam LocalTime startTime,
-            @RequestParam LocalTime endTime
-    ) {
+            @RequestParam LocalTime endTime) {
         return campusService.availability(id, date, startTime, endTime);
     }
 

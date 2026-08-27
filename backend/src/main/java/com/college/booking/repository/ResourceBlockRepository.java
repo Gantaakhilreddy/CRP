@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 
 public interface ResourceBlockRepository extends JpaRepository<ResourceBlock, Long> {
@@ -20,4 +21,25 @@ public interface ResourceBlockRepository extends JpaRepository<ResourceBlock, Lo
               AND b.endDate >= :date
             """)
     List<ResourceBlock> findActiveOnDate(@Param("resourceId") Long resourceId, @Param("date") LocalDate date);
+
+    @Query("""
+            SELECT b FROM ResourceBlock b
+            JOIN FETCH b.resource
+            WHERE b.active = true
+              AND b.startDate <= :date
+              AND b.endDate >= :date
+            """)
+    List<ResourceBlock> findActiveOn(@Param("date") LocalDate date);
+
+    @Query("""
+            SELECT b FROM ResourceBlock b
+            JOIN FETCH b.resource
+            WHERE b.active = true
+              AND b.startDate <= :date
+              AND b.endDate >= :date
+              AND b.resource.id IN :resourceIds
+            """)
+    List<ResourceBlock> findActiveOnIn(@Param("date") LocalDate date, @Param("resourceIds") Collection<Long> resourceIds);
+
+    void deleteByResourceId(Long resourceId);
 }

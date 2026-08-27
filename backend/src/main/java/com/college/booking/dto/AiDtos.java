@@ -1,16 +1,23 @@
 package com.college.booking.dto;
 
+import com.college.booking.dto.BookingDtos.BookingView;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 import java.util.List;
 import java.util.Map;
 
 public class AiDtos {
 
-    public record InterpretRequest(@NotBlank String prompt) {
+    public record InterpretRequest(
+            @NotBlank @Size(max = 2000) String prompt
+    ) {
     }
 
-    public record ChatRequest(@NotBlank String message, List<ChatTurn> history) {
+    public record ChatRequest(
+            @NotBlank @Size(max = 2000) String message,
+            List<ChatTurn> history
+    ) {
     }
 
     public record ChatTurn(String role, String content) {
@@ -25,7 +32,8 @@ public class AiDtos {
             List<String> requiredFacilities,
             String building,
             String query,
-            String intent
+            String intent,
+            String resourceName
     ) {
     }
 
@@ -54,6 +62,23 @@ public class AiDtos {
     ) {
     }
 
-    public record InsightsRequest(@NotBlank String question) {
+    public record InsightsRequest(@NotBlank @Size(max = 2000) String question) {
+    }
+
+    public record BookByLanguageRequest(
+            @NotBlank @Size(max = 2000) String prompt,
+            Boolean confirm
+    ) {
+    }
+
+    public record BookByLanguageResponse(
+            String action,
+            String message,
+            List<String> questions,
+            Intent intent,
+            List<Recommendation> matches,
+            BookingView booking,
+            boolean aiAvailable
+    ) {
     }
 }

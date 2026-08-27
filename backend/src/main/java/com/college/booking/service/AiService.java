@@ -1,20 +1,24 @@
 package com.college.booking.service;
 
+import com.college.booking.dto.AiDtos.BookByLanguageResponse;
 import com.college.booking.dto.AiDtos.ChatResponse;
 import com.college.booking.dto.AiDtos.ChatTurn;
 import com.college.booking.dto.AiDtos.Intent;
 import com.college.booking.dto.AiDtos.InterpretResponse;
 import com.college.booking.dto.AiDtos.Recommendation;
+import com.college.booking.dto.BookingDtos.CreateBookingRequest;
 import com.college.booking.dto.CampusDtos.ResourceCard;
 import com.college.booking.entity.Building;
 import com.college.booking.entity.Resource;
 import com.college.booking.entity.User;
+import com.college.booking.exception.ApiException;
 import com.college.booking.repository.BookingRepository;
 import com.college.booking.repository.BuildingRepository;
 import com.college.booking.repository.ResourceRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
@@ -40,19 +44,24 @@ public class AiService {
     private final ResourceRepository resourceRepository;
     private final BuildingRepository buildingRepository;
     private final BookingRepository bookingRepository;
-    private final DashboardService dashboardService;
+    private final AnalyticsService analyticsService;
+    private final BookingService bookingService;
+    private final Clock clock;
     private final ObjectMapper objectMapper;
 
     public AiService(GroqClient groqClient, CampusService campusService, AvailabilityService availabilityService,
                      ResourceRepository resourceRepository, BuildingRepository buildingRepository,
-                     BookingRepository bookingRepository, DashboardService dashboardService, ObjectMapper objectMapper) {
+                     BookingRepository bookingRepository, AnalyticsService analyticsService,
+                     BookingService bookingService, Clock clock, ObjectMapper objectMapper) {
         this.groqClient = groqClient;
         this.campusService = campusService;
         this.availabilityService = availabilityService;
         this.resourceRepository = resourceRepository;
         this.buildingRepository = buildingRepository;
         this.bookingRepository = bookingRepository;
-        this.dashboardService = dashboardService;
+        this.analyticsService = analyticsService;
+        this.bookingService = bookingService;
+        this.clock = clock;
         this.objectMapper = objectMapper;
     }
 
@@ -62,6 +71,129 @@ public class AiService {
         List<Recommendation> recs = recommend(intent, user);
         String explanation = explain(intent, recs);
         return new InterpretResponse(intent, recs, explanation, groqClient.isConfigured());
+    }
+
+    public BookByLanguageResponse bookFromLanguage(String prompt, User user, Boolean confirm) {
+        if (prompt == null || prompt.isBlank()) {
+            return clarify(null, List.of(), "Tell me the room, date, and time you need.",
+                    List.of("Which room?", "Which date?", "What start and end time?"));
+        }
+        Intent intent = sanitize(extractIntent(prompt));
+        List<Recommendation> recs = recommend(intent, user);
+        List<String> missing = missingSlots(intent);
+        boolean wantsBook = wantsBooking(prompt, intent);
+        List<Resource> exact = resolveExact(intent);
+
+        if (!missing.isEmpty()) {
+            return clarify(intent, recs,
+                    "I need a bit more information before I can book.",
+                    missing);
+        }
+        if (exact.size() > 1) {
+            return new BookByLanguageResponse("AMBIGUOUS",
+                    "Several rooms match that description. Pick one to continue.",
+                    List.of("Which of these rooms did you mean?"),
+                    intent, recs, null, groqClient.isConfigured());
+        }
+        if (exact.isEmpty() && recs.stream().filter(Recommendation::available).count() != 1 && recs.size() != 1) {
+            if (recs.isEmpty()) {
+                return new BookByLanguageResponse("UNAVAILABLE",
+                        "No matching resource exists in the campus database for that request.",
+                        List.of("Try a room name, code, or browse the campus map."),
+                        intent, recs, null, groqClient.isConfigured());
+            }
+            return new BookByLanguageResponse("AMBIGUOUS",
+                    "I found more than one match. Choose a room or be more specific.",
+                    List.of("Which resource should I book?"),
+                    intent, recs, null, groqClient.isConfigured());
+        }
+
+        Resource target = exact.size() == 1
+                ? exact.get(0)
+                : resourceRepository.findById(recs.get(0).resourceId()).orElse(null);
+        if (target == null) {
+            return new BookByLanguageResponse("UNAVAILABLE",
+                    "That resource does not exist.", List.of(), intent, recs, null, groqClient.isConfigured());
+        }
+        LocalDate date = parseDate(intent.date());
+        LocalTime start = parseTime(intent.startTime());
+        LocalTime end = parseTime(intent.endTime());
+        String reason = availabilityService.unavailableReason(target, date, start, end);
+        if (reason != null) {
+            return new BookByLanguageResponse("UNAVAILABLE",
+                    reason + " Here are alternatives from SQL.",
+                    List.of("Pick another time or room."),
+                    intent, recs, null, groqClient.isConfigured());
+        }
+        if (!wantsBook && !Boolean.TRUE.equals(confirm)) {
+            return new BookByLanguageResponse("CONFIRM",
+                    "I can book " + target.getName() + " on " + date + " from " + start + " to " + end
+                            + ". Confirm to submit the request through the normal approval workflow.",
+                    List.of("Confirm this booking?"),
+                    intent, recs, null, groqClient.isConfigured());
+        }
+        try {
+            var view = bookingService.create(user, new CreateBookingRequest(
+                    List.of(target.getId()), null, date, start, end,
+                    target.getName() + " booking", prompt, intent.capacity(), null, null, null, "RESOURCE"));
+            return new BookByLanguageResponse("BOOKED",
+                    "Booked " + target.getName() + " on " + date + " from " + start + " to " + end
+                            + ". Status: " + view.status() + ". This used the same server-side validation as the booking form.",
+                    List.of(), intent, recs, view, groqClient.isConfigured());
+        } catch (ApiException ex) {
+            return new BookByLanguageResponse("UNAVAILABLE", ex.getMessage(),
+                    List.of(), intent, recs, null, groqClient.isConfigured());
+        }
+    }
+
+    private BookByLanguageResponse clarify(Intent intent, List<Recommendation> recs, String message, List<String> questions) {
+        return new BookByLanguageResponse("CLARIFY", message, questions, intent, recs, null, groqClient.isConfigured());
+    }
+
+    private boolean wantsBooking(String prompt, Intent intent) {
+        String p = (prompt == null ? "" : prompt).toLowerCase(Locale.ROOT);
+        String i = intent == null || intent.intent() == null ? "" : intent.intent().toUpperCase(Locale.ROOT);
+        return p.contains("book") || p.contains("reserve") || p.contains("schedule") || "BOOK".equals(i);
+    }
+
+    private List<String> missingSlots(Intent intent) {
+        List<String> missing = new ArrayList<>();
+        if (intent.date() == null) {
+            missing.add("Which date? (today, tomorrow, or YYYY-MM-DD)");
+        }
+        if (intent.startTime() == null || intent.endTime() == null) {
+            missing.add("What start and end time?");
+        }
+        if ((intent.resourceName() == null || intent.resourceName().isBlank())
+                && (intent.query() == null || intent.query().isBlank())
+                && intent.resourceType() == null) {
+            missing.add("Which room or resource type?");
+        }
+        return missing;
+    }
+
+    private List<Resource> resolveExact(Intent intent) {
+        List<String> hints = new ArrayList<>();
+        if (intent.resourceName() != null && !intent.resourceName().isBlank()) {
+            hints.add(intent.resourceName().trim());
+        }
+        if (intent.query() != null && !intent.query().isBlank()) {
+            hints.add(intent.query().trim());
+        }
+        List<Resource> exact = new ArrayList<>();
+        for (String hint : hints) {
+            resourceRepository.findByCodeIgnoreCase(hint).ifPresent(exact::add);
+            resourceRepository.findByNameIgnoreCase(hint).ifPresent(exact::add);
+            if (exact.isEmpty()) {
+                List<Resource> contains = resourceRepository.findByEnabledTrueAndNameContainingIgnoreCase(hint);
+                if (contains.size() == 1) {
+                    exact.add(contains.get(0));
+                } else if (contains.size() > 1 && exact.isEmpty()) {
+                    return contains;
+                }
+            }
+        }
+        return exact.stream().distinct().toList();
     }
 
     public ChatResponse chat(String message, List<ChatTurn> history, User user) {
@@ -137,11 +269,14 @@ public class AiService {
     }
 
     public String insights(String question) {
-        Map<String, Object> stats = dashboardService.adminStats();
-        String facts = stats.toString();
+        var overview = analyticsService.overview(null, null);
+        String facts = "KPIs=" + overview.kpis()
+                + " statusMix=" + overview.statusMix()
+                + " mostBooked=" + overview.mostBooked()
+                + " predictions(kind=FORECAST, not live)=" + overview.predictions();
         try {
             return groqClient.chat(
-                    "You are a campus operations analyst. Explain the provided statistics. Never invent numbers. If the question cannot be answered from the facts, say so.",
+                    "You are a campus operations analyst. Explain the provided statistics. Never invent numbers. Clearly distinguish live occupancy from FORECAST predictions. If the question cannot be answered from the facts, say so.",
                     "Question: " + question + "\nStatistics: " + facts
             );
         } catch (Exception ex) {
@@ -153,9 +288,9 @@ public class AiService {
         if (groqClient.isConfigured()) {
             try {
                 String json = groqClient.chatJson(
-                        "Extract a booking intent as JSON with keys: resourceType (CLASSROOM|LABORATORY|SEMINAR_HALL|LIBRARY|AUDITORIUM|EXAMINATION_HALL|null), capacity (int or null), date (YYYY-MM-DD or null, today is "
-                                + LocalDate.now() + ", tomorrow is " + LocalDate.now().plusDays(1)
-                                + "), startTime (HH:mm or null), endTime (HH:mm or null), requiredFacilities (array of codes like PROJECTOR, SMART_BOARD, AC, WIFI, AUDIO, MIC, COMPUTERS), building (string or null), query (short search phrase), intent (FIND|LOCATE|AVAILABILITY|BOOKINGS|ANALYTICS).",
+                        "Extract a booking intent as JSON with keys: resourceType (CLASSROOM|LABORATORY|SEMINAR_HALL|LIBRARY|AUDITORIUM|EXAMINATION_HALL|null), capacity (int or null, only when the user states a group size), date (YYYY-MM-DD or null, today is "
+                                + LocalDate.now(clock) + ", tomorrow is " + LocalDate.now(clock).plusDays(1)
+                                + "), startTime (HH:mm or null), endTime (HH:mm or null), requiredFacilities (array of codes like PROJECTOR, SMART_BOARD, AC, WIFI, AUDIO, MIC, COMPUTERS), building (string or null), query (short search phrase), resourceName (specific room name or code if given), intent (FIND|LOCATE|AVAILABILITY|BOOKINGS|ANALYTICS|BOOK).",
                         prompt
                 );
                 return objectMapper.readValue(json, Intent.class);
@@ -196,10 +331,14 @@ public class AiService {
         List<String> facilities = intent.requiredFacilities() == null ? List.of() : intent.requiredFacilities().stream()
                 .map(f -> f.trim().toUpperCase(Locale.ROOT).replace(' ', '_'))
                 .toList();
+        String resourceName = intent.resourceName() == null ? null : intent.resourceName().trim();
+        if (resourceName != null && resourceName.isBlank()) {
+            resourceName = null;
+        }
         return new Intent(type, cap, date == null ? null : date.toString(),
                 start == null ? null : start.toString(),
                 end == null ? null : end.toString(),
-                facilities, intent.building(), intent.query(), intent.intent());
+                facilities, intent.building(), intent.query(), intent.intent(), resourceName);
     }
 
     public List<Recommendation> recommend(Intent intent, User user) {
@@ -307,28 +446,38 @@ public class AiService {
         else if (p.contains("library")) type = "LIBRARY";
         else if (p.contains("auditorium")) type = "AUDITORIUM";
         else if (p.contains("exam")) type = "EXAMINATION_HALL";
+        else if (p.contains("conference")) type = "CLASSROOM";
         else if (p.contains("class") || p.contains("room")) type = "CLASSROOM";
         Integer cap = null;
-        var m = java.util.regex.Pattern.compile("(\\d+)\\s*(students|people|seats|computers)?").matcher(p);
-        if (m.find()) {
-            cap = Integer.parseInt(m.group(1));
+        var capM = java.util.regex.Pattern.compile("(?:for|of)\\s*(\\d+)\\s*(?:students|people|seats)?").matcher(p);
+        var capM2 = java.util.regex.Pattern.compile("(\\d+)\\s*(students|people|seats)").matcher(p);
+        if (capM.find()) {
+            cap = Integer.parseInt(capM.group(1));
+        } else if (capM2.find()) {
+            cap = Integer.parseInt(capM2.group(1));
         }
-        LocalDate date = p.contains("tomorrow") ? LocalDate.now().plusDays(1)
-                : p.contains("today") ? LocalDate.now() : null;
+        LocalDate date = p.contains("tomorrow") ? LocalDate.now(clock).plusDays(1)
+                : p.contains("today") ? LocalDate.now(clock) : null;
         LocalTime start = null;
         LocalTime end = null;
-        var tm = java.util.regex.Pattern.compile("(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)").matcher(p);
-        List<LocalTime> times = new ArrayList<>();
-        while (tm.find() && times.size() < 2) {
-            int h = Integer.parseInt(tm.group(1));
-            int min = tm.group(2) == null ? 0 : Integer.parseInt(tm.group(2));
-            String ap = tm.group(3);
-            if (ap != null && ap.equals("pm") && h < 12) h += 12;
-            if (ap != null && ap.equals("am") && h == 12) h = 0;
-            if (h <= 23 && min <= 59) times.add(LocalTime.of(h, min));
+        var range = java.util.regex.Pattern.compile(
+                "(?:from\\s+)?(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?\\s*(?:to|-|–|until)\\s*(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?"
+        ).matcher(p);
+        if (range.find()) {
+            start = toTime(range.group(1), range.group(2), range.group(3), range.group(6));
+            end = toTime(range.group(4), range.group(5), range.group(6), range.group(3));
+            if (start != null && end != null && !end.isAfter(start) && end.getHour() < 12) {
+                end = end.plusHours(12);
+            }
+        } else {
+            var tm = java.util.regex.Pattern.compile("(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)").matcher(p);
+            List<LocalTime> times = new ArrayList<>();
+            while (tm.find() && times.size() < 2) {
+                times.add(toTime(tm.group(1), tm.group(2), tm.group(3), null));
+            }
+            if (times.size() >= 1) start = times.get(0);
+            if (times.size() >= 2) end = times.get(1);
         }
-        if (times.size() >= 1) start = times.get(0);
-        if (times.size() >= 2) end = times.get(1);
         List<String> fac = new ArrayList<>();
         if (p.contains("projector")) fac.add("PROJECTOR");
         if (p.contains("smart")) fac.add("SMART_BOARD");
@@ -342,10 +491,43 @@ public class AiService {
         if (p.contains("central") || p.contains("wisdom")) building = "WISDOM";
         if (p.contains("siemens") || p.contains("honesty")) building = "HONESTY";
         if (p.contains("truth") || p.contains("university")) building = "TRUTH";
-        String intent = p.contains("where") ? "LOCATE" : "FIND";
+        String resourceName = null;
+        if (p.contains("conference room")) {
+            resourceName = "Conference Room";
+        } else {
+            var named = java.util.regex.Pattern.compile(
+                    "(?:classroom|lab|hall|room)\\s+([a-z0-9-]{1,20})",
+                    java.util.regex.Pattern.CASE_INSENSITIVE).matcher(prompt);
+            if (named.find()) {
+                resourceName = named.group(0).trim();
+            }
+        }
+        var code = java.util.regex.Pattern.compile("\\b([A-Z]{1,4}-[A-Z0-9]{2,8})\\b").matcher(prompt);
+        if (code.find()) {
+            resourceName = code.group(1);
+        }
+        String intent = p.contains("book") || p.contains("reserve") || p.contains("schedule") ? "BOOK"
+                : p.contains("where") ? "LOCATE" : "FIND";
+        String query = resourceName != null ? resourceName : prompt;
         return new Intent(type, cap, date == null ? null : date.toString(),
                 start == null ? null : start.toString(), end == null ? null : end.toString(),
-                fac, building, prompt, intent);
+                fac, building, query, intent, resourceName);
+    }
+
+    private LocalTime toTime(String hour, String minute, String meridian, String otherMeridian) {
+        try {
+            int h = Integer.parseInt(hour);
+            int min = minute == null ? 0 : Integer.parseInt(minute);
+            String ap = meridian == null ? otherMeridian : meridian;
+            if (ap != null && ap.equalsIgnoreCase("pm") && h < 12) h += 12;
+            if (ap != null && ap.equalsIgnoreCase("am") && h == 12) h = 0;
+            if (ap == null && h > 0 && h < 8) h += 12;
+            if (h <= 23 && min <= 59) {
+                return LocalTime.of(h, min);
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     private String searchableQuery(String query) {

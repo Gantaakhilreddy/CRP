@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -27,6 +28,8 @@ public class CheckInService {
     private final UserRepository userRepository;
     private final BookingService bookingService;
     private final AuditService auditService;
+    private final OccupancyService occupancyService;
+    private final Clock clock;
     private final int graceMinutes;
 
     public CheckInService(BookingRepository bookingRepository,
@@ -34,12 +37,16 @@ public class CheckInService {
                           UserRepository userRepository,
                           BookingService bookingService,
                           AuditService auditService,
+                          OccupancyService occupancyService,
+                          Clock clock,
                           @Value("${app.no-show-grace-minutes}") int graceMinutes) {
         this.bookingRepository = bookingRepository;
         this.checkInRepository = checkInRepository;
         this.userRepository = userRepository;
         this.bookingService = bookingService;
         this.auditService = auditService;
+        this.occupancyService = occupancyService;
+        this.clock = clock;
         this.graceMinutes = graceMinutes;
     }
 
@@ -52,10 +59,14 @@ public class CheckInService {
         if (booking.getStatus() != BookingStatus.CONFIRMED) {
             throw ApiException.badRequest("INVALID_STATUS", "Only confirmed bookings can be checked in.");
         }
-        if (!booking.getBookingDate().equals(LocalDate.now())) {
+        if (token != null && !token.isBlank() && booking.getCheckInToken() != null
+                && !booking.getCheckInToken().equals(token)) {
+            throw ApiException.forbidden("Invalid check-in token.");
+        }
+        if (!booking.getBookingDate().equals(LocalDate.now(clock))) {
             throw ApiException.badRequest("WRONG_DATE", "Check-in is only allowed on the booking date.");
         }
-        LocalTime now = LocalTime.now();
+        LocalTime now = LocalTime.now(clock);
         if (now.isBefore(booking.getStartTime().minusMinutes(30))) {
             throw ApiException.badRequest("TOO_EARLY", "Check-in opens 30 minutes before the booking starts.");
         }
@@ -69,6 +80,7 @@ public class CheckInService {
         checkInRepository.save(checkIn);
         booking.setStatus(BookingStatus.CHECKED_IN);
         bookingRepository.save(booking);
+        occupancyService.invalidateAfterCommit();
         auditService.record(actor, "CHECK_IN", "Booking", booking.getId(), null);
         return bookingService.toView(booking);
     }
@@ -92,6 +104,7 @@ public class CheckInService {
         checkInRepository.save(checkIn);
         booking.setStatus(BookingStatus.COMPLETED);
         bookingRepository.save(booking);
+        occupancyService.invalidateAfterCommit();
         auditService.record(actor, "CHECK_OUT", "Booking", booking.getId(),
                 checkIn.getDurationMinutes() + " minutes");
         return bookingService.toView(booking);
@@ -99,8 +112,8 @@ public class CheckInService {
 
     @Transactional
     public int markNoShows() {
-        LocalDate today = LocalDate.now();
-        LocalTime cutoff = LocalTime.now().minusMinutes(graceMinutes);
+        LocalDate today = LocalDate.now(clock);
+        LocalTime cutoff = LocalTime.now(clock).minusMinutes(graceMinutes);
         List<Booking> candidates = bookingRepository.findNoShowCandidates(BookingStatus.CONFIRMED, today, cutoff);
         int count = 0;
         for (Booking booking : candidates) {
@@ -113,6 +126,9 @@ public class CheckInService {
             user.setNoShowCount(user.getNoShowCount() == null ? 1 : user.getNoShowCount() + 1);
             userRepository.save(user);
             count++;
+        }
+        if (count > 0) {
+            occupancyService.invalidateAfterCommit();
         }
         return count;
     }

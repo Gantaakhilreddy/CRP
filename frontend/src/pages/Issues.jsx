@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import client from '../api/client'
+import client, { asItems } from '../api/client'
 import { errorMessage } from '../utils/status'
 
 export default function Issues() {
@@ -9,7 +9,7 @@ export default function Issues() {
   const [form, setForm] = useState({ resourceId: '', category: 'PROJECTOR', description: '' })
   useEffect(() => {
     client.get('/issues/my').then((r) => setRows(r.data)).catch(() => {})
-    client.get('/resources').then((r) => setResources(r.data.slice(0, 80)))
+    client.get('/resources', { params: { size: 100 } }).then((r) => setResources(asItems(r.data).slice(0, 80)))
   }, [])
   const submit = async (e) => {
     e.preventDefault()

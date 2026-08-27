@@ -1,5 +1,7 @@
 package com.college.booking.controller;
 
+import com.college.booking.dto.AiDtos.BookByLanguageRequest;
+import com.college.booking.dto.AiDtos.BookByLanguageResponse;
 import com.college.booking.dto.AiDtos.ChatRequest;
 import com.college.booking.dto.AiDtos.ChatResponse;
 import com.college.booking.dto.AiDtos.InsightsRequest;
@@ -45,5 +47,10 @@ public class AiController {
     @PreAuthorize("hasRole('ADMIN')")
     public Map<String, String> insights(@Valid @RequestBody InsightsRequest request) {
         return Map.of("reply", aiService.insights(request.question()));
+    }
+
+    @PostMapping("/book")
+    public BookByLanguageResponse book(@Valid @RequestBody BookByLanguageRequest request) {
+        return aiService.bookFromLanguage(request.prompt(), SecurityUtils.currentUser(), request.confirm());
     }
 }

@@ -29,10 +29,10 @@ public class WaitlistService {
     private final int holdMinutes;
 
     public WaitlistService(WaitlistRepository waitlistRepository,
-                           ResourceRepository resourceRepository,
-                           BookingResourceRepository bookingResourceRepository,
-                           NotificationService notificationService,
-                           @Value("${app.waitlist-hold-minutes}") int holdMinutes) {
+            ResourceRepository resourceRepository,
+            BookingResourceRepository bookingResourceRepository,
+            NotificationService notificationService,
+            @Value("${app.waitlist-hold-minutes}") int holdMinutes) {
         this.waitlistRepository = waitlistRepository;
         this.resourceRepository = resourceRepository;
         this.bookingResourceRepository = bookingResourceRepository;
@@ -71,33 +71,36 @@ public class WaitlistService {
 
     @Transactional
     public void notifyNext(Booking cancelled) {
-        bookingResourceRepository.findByBookingId(cancelled.getId()).forEach(br -> {
-            List<Waitlist> queue = waitlistRepository
-                    .findByResourceIdAndBookingDateAndStartTimeAndEndTimeAndStatusOrderByCreatedAtAsc(
-                            br.getResource().getId(), cancelled.getBookingDate(),
-                            cancelled.getStartTime(), cancelled.getEndTime(), WaitlistStatus.WAITING);
-            if (queue.isEmpty()) {
-                return;
-            }
-            Waitlist next = queue.get(0);
-            next.setStatus(WaitlistStatus.NOTIFIED);
-            next.setNotifiedAt(Instant.now());
-            next.setExpiresAt(Instant.now().plus(holdMinutes, ChronoUnit.MINUTES));
-            waitlistRepository.save(next);
-            notificationService.notify(next.getUser(), NotificationType.WAITLIST_AVAILABLE, "A slot opened",
-                    br.getResource().getName() + " is available on " + cancelled.getBookingDate()
-                            + " " + cancelled.getStartTime() + "–" + cancelled.getEndTime()
-                            + ". Reserve it within " + holdMinutes + " minutes.",
-                    "/resources/" + br.getResource().getId());
-        });
+        bookingResourceRepository.findByBookingId(cancelled.getId()).forEach(br ->
+                offerNext(br.getResource(), cancelled.getBookingDate(), cancelled.getStartTime(), cancelled.getEndTime()));
     }
 
     @Transactional
     public void expireHolds() {
-        waitlistRepository.findByStatusAndExpiresAtBefore(WaitlistStatus.NOTIFIED, Instant.now())
-                .forEach(w -> {
-                    w.setStatus(WaitlistStatus.EXPIRED);
-                    waitlistRepository.save(w);
-                });
+        List<Waitlist> expired = waitlistRepository.findByStatusAndExpiresAtBefore(WaitlistStatus.NOTIFIED, Instant.now());
+        for (Waitlist w : expired) {
+            w.setStatus(WaitlistStatus.EXPIRED);
+            waitlistRepository.save(w);
+            offerNext(w.getResource(), w.getBookingDate(), w.getStartTime(), w.getEndTime());
+        }
+    }
+
+    private void offerNext(com.college.booking.entity.Resource resource, java.time.LocalDate date,
+                           java.time.LocalTime start, java.time.LocalTime end) {
+        List<Waitlist> queue = waitlistRepository
+                .findByResourceIdAndBookingDateAndStartTimeAndEndTimeAndStatusOrderByCreatedAtAsc(
+                        resource.getId(), date, start, end, WaitlistStatus.WAITING);
+        if (queue.isEmpty()) {
+            return;
+        }
+        Waitlist next = queue.get(0);
+        next.setStatus(WaitlistStatus.NOTIFIED);
+        next.setNotifiedAt(Instant.now());
+        next.setExpiresAt(Instant.now().plus(holdMinutes, ChronoUnit.MINUTES));
+        waitlistRepository.save(next);
+        notificationService.notify(next.getUser(), NotificationType.WAITLIST_AVAILABLE, "A slot opened",
+                resource.getName() + " is available on " + date + " " + start + "–" + end
+                        + ". Reserve it within " + holdMinutes + " minutes.",
+                "/resources/" + resource.getId());
     }
 }

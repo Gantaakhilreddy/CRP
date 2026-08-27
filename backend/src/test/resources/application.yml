@@ -31,6 +31,7 @@ app:
   college-short: TEST
   demo-password: Password@123
   frontend-url: http://localhost:5173
+  timezone: UTC
   no-show-grace-minutes: 15
   waitlist-hold-minutes: 20
   working-hours-start: "08:00"

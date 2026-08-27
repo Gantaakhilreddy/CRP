@@ -44,6 +44,7 @@ app:
   college-short: ${COLLEGE_SHORT:VVIT}
   demo-password: ${DEMO_PASSWORD:Password@123}
   frontend-url: ${FRONTEND_URL:http://localhost:5173}
+  timezone: ${APP_TIMEZONE:Asia/Kolkata}
   no-show-grace-minutes: 15
   waitlist-hold-minutes: 20
   working-hours-start: "08:00"

@@ -164,4 +164,23 @@ public class CampusDtos {
             String typeCode
     ) {
     }
+
+    public record PageResponse<T>(List<T> items, int page, int size, long total, int totalPages) {
+        public static <T> PageResponse<T> of(List<T> all, int page, int size) {
+            int safeSize = Math.min(100, Math.max(1, size));
+            int safePage = Math.max(0, page);
+            int from = Math.min(safePage * safeSize, all.size());
+            int to = Math.min(from + safeSize, all.size());
+            int pages = all.isEmpty() ? 0 : (int) Math.ceil(all.size() / (double) safeSize);
+            return new PageResponse<>(all.subList(from, to), safePage, safeSize, all.size(), pages);
+        }
+    }
+
+    public record CampusOverview(
+            List<BuildingSummary> buildings,
+            java.util.Map<String, Object> live,
+            java.util.List<java.util.Map<String, Object>> heatmap,
+            java.time.Instant asOf
+    ) {
+    }
 }

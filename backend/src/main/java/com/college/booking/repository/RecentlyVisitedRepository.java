@@ -9,4 +9,5 @@ import java.util.Optional;
 public interface RecentlyVisitedRepository extends JpaRepository<RecentlyVisited, Long> {
     List<RecentlyVisited> findTop8ByUserIdOrderByVisitedAtDesc(Long userId);
     Optional<RecentlyVisited> findByUserIdAndResourceId(Long userId, Long resourceId);
+    void deleteByResourceId(Long resourceId);
 }

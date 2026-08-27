@@ -7,8 +7,11 @@ export function statusMeta(status) {
     case 'MAINTENANCE':
       return { label: 'Maintenance', color: '#ca8a04', emoji: '🟡' }
     case 'BLOCKED':
+    case 'UNAVAILABLE':
     case 'OUT_OF_SERVICE':
       return { label: 'Unavailable', color: '#334155', emoji: '⚫' }
+    case 'INACTIVE':
+      return { label: 'Inactive', color: '#64748b', emoji: '⚪' }
     case 'PENDING':
       return { label: 'Pending', color: '#ea580c', emoji: '🟠' }
     default:
